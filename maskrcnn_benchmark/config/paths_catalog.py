@@ -6,8 +6,7 @@ import copy
 
 
 class DatasetCatalog(object):
-    #DATA_DIR = "/home/users/alatif/data/ImageCorpora/"
-    DATA_DIR = "/media/rafi/Samsung_T5/_DATASETS/"
+    DATA_DIR = "/home/zhanwen/datasets"
     DATASETS = {
         "coco_2017_train": {
             "img_dir": "coco/train2017",
@@ -107,17 +106,16 @@ class DatasetCatalog(object):
             "ann_file": "cityscapes/annotations/instancesonly_filtered_gtFine_test.json"
         },
         "VG_stanford_filtered": {
-            "img_dir": "vg/VG_100K",
-            "roidb_file": "vg/VG-SGG.h5",
-            "dict_file": "vg/VG-SGG-dicts.json",
-            "image_file": "vg/image_data.json",
+            "img_dir": "visual_genome/VG_100K",
+            "roidb_file": "visual_genome/VG-SGG.h5",
+            "dict_file": "visual_genome/VG-SGG-dicts.json",
+            "image_file": "visual_genome/image_data.json",
         },
         "VG_stanford_filtered_with_attribute": {
-            "img_dir": "vg/VG_100K",
-            "roidb_file": "vg/VG-SGG-with-attri.h5",
-            "dict_file": "vg/VG-SGG-dicts-with-attri.json",
-            "image_file": "vg/image_data.json",
-            "capgraphs_file": "vg/vg_capgraphs_anno.json",
+            "img_dir": "visual_genome/VG_100K",
+            "roidb_file": "visual_genome/VG-SGG-with-attri.h5",
+            "dict_file": "visual_genome/VG-SGG-dicts-with-attri.json",
+            "image_file": "visual_genome/image_data.json",
         },
     }
 
