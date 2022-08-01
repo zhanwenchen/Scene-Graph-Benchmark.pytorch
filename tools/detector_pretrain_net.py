@@ -44,6 +44,16 @@ def train(cfg, local_rank, distributed, logger):
 
     optimizer = make_optimizer(cfg, model, logger, rl_factor=float(cfg.SOLVER.IMS_PER_BATCH))
     scheduler = make_lr_scheduler(cfg, optimizer)
+    
+    save_to_disk = get_rank() == 0
+    logger.info('instatntiating checkpointer')
+    checkpointer = DetectronCheckpointer(
+        cfg, model, optimizer, scheduler, output_dir, save_to_disk
+    )
+    logger.info('finished instatntiating checkpointer')
+    extra_checkpoint_data = checkpointer.load(cfg.MODEL.WEIGHT, update_schedule=cfg.SOLVER.UPDATE_SCHEDULE_DURING_LOAD)
+    logger.info('finished loading extra checkpoint data')
+    arguments.update(extra_checkpoint_data)
 
     # Initialize mixed-precision training
     use_mixed_precision = cfg.DTYPE == "float16"
@@ -65,15 +75,7 @@ def train(cfg, local_rank, distributed, logger):
 
     output_dir = cfg.OUTPUT_DIR
 
-    save_to_disk = get_rank() == 0
-    logger.info('instatntiating checkpointer')
-    checkpointer = DetectronCheckpointer(
-        cfg, model, optimizer, scheduler, output_dir, save_to_disk
-    )
-    logger.info('finished instatntiating checkpointer')
-    extra_checkpoint_data = checkpointer.load(cfg.MODEL.WEIGHT, update_schedule=cfg.SOLVER.UPDATE_SCHEDULE_DURING_LOAD)
-    logger.info('finished loading extra checkpoint data')
-    arguments.update(extra_checkpoint_data)
+    
     
     logger.info('making data loaders')
     train_data_loader = make_data_loader(
