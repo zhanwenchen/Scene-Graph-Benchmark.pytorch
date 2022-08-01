@@ -51,11 +51,14 @@ def train(cfg, local_rank, distributed, logger):
     model, optimizer = amp.initialize(model, optimizer, opt_level=amp_opt_level)
 
     if distributed:
+        logger.info('starting distributed')
+        torch.multiprocessing.set_start_method('spawn')
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,
             # this should be removed if we update BatchNorm stats
             broadcast_buffers=False,
         )
+        logger.info('ending distributed')
 
     arguments = {}
     arguments["iteration"] = 0
@@ -63,12 +66,16 @@ def train(cfg, local_rank, distributed, logger):
     output_dir = cfg.OUTPUT_DIR
 
     save_to_disk = get_rank() == 0
+    logger.info('instatntiating checkpointer')
     checkpointer = DetectronCheckpointer(
         cfg, model, optimizer, scheduler, output_dir, save_to_disk
     )
+    logger.info('finished instatntiating checkpointer')
     extra_checkpoint_data = checkpointer.load(cfg.MODEL.WEIGHT, update_schedule=cfg.SOLVER.UPDATE_SCHEDULE_DURING_LOAD)
+    logger.info('finished loading extra checkpoint data')
     arguments.update(extra_checkpoint_data)
-
+    
+    logger.info('making data loaders')
     train_data_loader = make_data_loader(
         cfg,
         mode='train',
@@ -80,7 +87,7 @@ def train(cfg, local_rank, distributed, logger):
         mode='val',
         is_distributed=distributed,
     )
-
+    logger.info('finished making data loaders')
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
 
     if cfg.SOLVER.PRE_VAL:

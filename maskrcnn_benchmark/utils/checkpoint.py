@@ -62,7 +62,9 @@ class Checkpointer(object):
             return {}
         self.logger.info("Loading checkpoint from {}".format(f))
         checkpoint = self._load_file(f)
+        self.logger.info('Finished loading checkpoint')
         self._load_model(checkpoint, load_mapping)
+        self.logger.info('Finished loading model')
         if with_optim:
             if "optimizer" in checkpoint and self.optimizer:
                 self.logger.info("Loading optimizer from {}".format(f))
