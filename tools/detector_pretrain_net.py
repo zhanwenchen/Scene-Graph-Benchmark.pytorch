@@ -45,6 +45,8 @@ def train(cfg, local_rank, distributed, logger):
     optimizer = make_optimizer(cfg, model, logger, rl_factor=float(cfg.SOLVER.IMS_PER_BATCH))
     scheduler = make_lr_scheduler(cfg, optimizer)
     
+    output_dir = cfg.OUTPUT_DIR
+    arguments = {}
     save_to_disk = get_rank() == 0
     logger.info('instatntiating checkpointer')
     checkpointer = DetectronCheckpointer(
@@ -70,10 +72,8 @@ def train(cfg, local_rank, distributed, logger):
         )
         logger.info('ending distributed')
 
-    arguments = {}
     arguments["iteration"] = 0
 
-    output_dir = cfg.OUTPUT_DIR
 
     
     
@@ -181,7 +181,7 @@ def train(cfg, local_rank, distributed, logger):
 def run_val(cfg, model, val_data_loaders, distributed):
     if distributed:
         model = model.module
-    torch.cuda.empty_cache()  # TODO check if it helps
+    #torch.cuda.empty_cache()  # TODO check if it helps
     iou_types = ("bbox",)
     if cfg.MODEL.MASK_ON:
         iou_types = iou_types + ("segm",)
@@ -212,7 +212,7 @@ def run_val(cfg, model, val_data_loaders, distributed):
 def run_test(cfg, model, distributed):
     if distributed:
         model = model.module
-    torch.cuda.empty_cache()  # TODO check if it helps
+    #torch.cuda.empty_cache()  # TODO check if it helps
     iou_types = ("bbox",)
     if cfg.MODEL.MASK_ON:
         iou_types = iou_types + ("segm",)
