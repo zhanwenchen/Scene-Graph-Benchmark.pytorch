@@ -1,13 +1,15 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import torch
 from torch import nn
-from torch.nn import functional as F
+from torch.nn import Module
+from torch.nn.functional import relu as F_relu
 
 from maskrcnn_benchmark.modeling import registry
 from maskrcnn_benchmark.modeling.backbone import resnet
 from maskrcnn_benchmark.modeling.poolers import Pooler
 from maskrcnn_benchmark.modeling.make_layers import group_norm
 from maskrcnn_benchmark.modeling.make_layers import make_fc
+from maskrcnn_benchmark.modeling.backbone.load_vgg import load_vgg
 
 
 @registry.ROI_BOX_FEATURE_EXTRACTORS.register("ResNet50Conv5ROIFeatureExtractor")
@@ -42,8 +44,69 @@ class ResNet50Conv5ROIFeatureExtractor(nn.Module):
 
     def forward(self, x, proposals):
         x = self.pooler(x, proposals)
-        x = self.head(x)
-        return x
+        return self.head(x)
+
+
+@registry.ROI_BOX_FEATURE_EXTRACTORS.register("VGGFeatureExtractor")
+class VGGFeatureExtractor(Module):
+    """
+    Heads for FPN for classification
+    """
+
+    def __init__(self, cfg, in_channels, half_out=False, cat_all_levels=False):
+        super().__init__()
+
+        resolution = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION
+        scales = cfg.MODEL.ROI_BOX_HEAD.POOLER_SCALES
+        sampling_ratio = cfg.MODEL.ROI_BOX_HEAD.POOLER_SAMPLING_RATIO
+        pooler = Pooler(
+            output_size=(resolution, resolution),
+            scales=scales,
+            sampling_ratio=sampling_ratio,
+            in_channels=in_channels,
+            cat_all_levels=cat_all_levels,
+        )
+        input_size = in_channels * resolution ** 2
+        representation_size = cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM
+        # use_gn = cfg.MODEL.ROI_BOX_HEAD.USE_GN
+        self.pooler = pooler
+
+        if half_out:
+            out_dim = int(representation_size / 2)
+        else:
+            out_dim = representation_size
+        self.classifier = load_vgg().classifier
+        self.resize_channels = input_size
+        self.out_channels = out_dim
+
+    def forward(self, x, proposals):
+        # (Pdb) x.size()
+        # torch.Size([1280, 256, 7, 7])
+
+        x = self.pooler(x, proposals)
+        del proposals
+        # (Pdb) x.size()
+        # torch.Size([16196, 256, 7, 7])
+        # (Pdb) x.size()
+        # torch.Size([1280, 12544])
+        # (Pdb) x.size()
+        # torch.Size([1280, 256, 7, 7])
+
+        x = x.view(x.size(0), -1)
+
+        # (Pdb) x.size()
+        # torch.Size([16196, 12544])
+        # (Pdb) x.size()
+        # torch.Size([1280, 12544])
+
+        return self.classifier(x)
+        # (Pdb) torch.Size([16196, 4096])
+        # (Pdb) x.size()
+        # torch.Size([1280, 4096])
+
+    def forward_without_pool(self, x):
+        x = x.view(x.size(0), -1)
+        return self.classifier(x)
 
 
 @registry.ROI_BOX_FEATURE_EXTRACTORS.register("FPN2MLPFeatureExtractor")
@@ -75,25 +138,45 @@ class FPN2MLPFeatureExtractor(nn.Module):
             out_dim = int(representation_size / 2)
         else:
             out_dim = representation_size
-        
         self.fc7 = make_fc(representation_size, out_dim, use_gn)
         self.resize_channels = input_size
         self.out_channels = out_dim
 
     def forward(self, x, proposals):
+        # (Pdb) x.size()
+        # torch.Size([1280, 256, 7, 7])
+
         x = self.pooler(x, proposals)
+        del proposals
+        # (Pdb) x.size()
+        # torch.Size([16196, 256, 7, 7])
+        # (Pdb) x.size()
+        # torch.Size([1280, 12544])
+        # (Pdb) x.size()
+        # torch.Size([1280, 256, 7, 7])
+
         x = x.view(x.size(0), -1)
 
-        x = F.relu(self.fc6(x))
-        x = F.relu(self.fc7(x))
+        # (Pdb) x.size()
+        # torch.Size([16196, 12544])
+        # (Pdb) x.size()
+        # torch.Size([1280, 12544])
 
-        return x
+        x = F_relu(self.fc6(x))
+        # (Pdb) x.size()
+        # (Pdb) torch.Size([16196, 4096])
+        # (Pdb) x.size()
+        # torch.Size([1280, 4096])
+
+        return F_relu(self.fc7(x))
+        # (Pdb) torch.Size([16196, 4096])
+        # (Pdb) x.size()
+        # torch.Size([1280, 4096])
 
     def forward_without_pool(self, x):
         x = x.view(x.size(0), -1)
-        x = F.relu(self.fc6(x))
-        x = F.relu(self.fc7(x))
-        return x
+        x = F_relu(self.fc6(x))
+        return F_relu(self.fc7(x))
 
 
 @registry.ROI_BOX_FEATURE_EXTRACTORS.register("FPNXconv1fcFeatureExtractor")
@@ -155,7 +238,7 @@ class FPNXconv1fcFeatureExtractor(nn.Module):
         x = self.pooler(x, proposals)
         x = self.xconvs(x)
         x = x.view(x.size(0), -1)
-        x = F.relu(self.fc6(x))
+        x = F_relu(self.fc6(x))
         return x
 
 

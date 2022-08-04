@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-  export CUDA_VISIBLE_DEVICES=0,1,2,3
+  export CUDA_VISIBLE_DEVICES=4,5,6,7
   export NUM_GPUS=4
-  export MODEL_NAME="pretrain_resnet_1"
+  export MODEL_NAME="pretrain_vgg_og_1"
   echo "Started pretraining model ${MODEL_NAME}"
   MODEL_DIRNAME=./checkpoints/pretrained_faster_rcnn/${MODEL_NAME}/
   mkdir ${MODEL_DIRNAME} &&
   cp -r ./tools/ ${MODEL_DIRNAME} &&
   cp -r ./scripts/ ${MODEL_DIRNAME} &&
   cp -r ./maskrcnn_benchmark/ ${MODEL_DIRNAME} &&
-  python -m torch.distributed.launch --master_port=10001 --nproc_per_node=$NUM_GPUS  tools/detector_pretrain_net.py \
-  --config-file "configs/e2e_relation_detector_X_101_32_8_FPN_1x.yaml" \
-  MODEL.WEIGHT /home/zhanwen/sgb_og/checkpoints/pretrained_faster_rcnn/X-101-32x8d.pkl \
+  python -m torch.distributed.launch --master_port=10002 --nproc_per_node=$NUM_GPUS  tools/detector_pretrain_net.py \
+  --config-file "configs/pretrain_detector_VGG16_1x.yaml" \
+  MODEL.VGG.PRETRAIN_STRATEGY none \
   MODEL.RELATION_ON False \
-  SOLVER.IMS_PER_BATCH 4 \
+  SOLVER.IMS_PER_BATCH 8 \
   TEST.IMS_PER_BATCH ${NUM_GPUS} \
   SOLVER.PRE_VAL True \
   DTYPE "float32" \
