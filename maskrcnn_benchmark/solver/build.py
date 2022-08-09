@@ -4,8 +4,10 @@ import torch
 from .lr_scheduler import WarmupMultiStepLR, WarmupReduceLROnPlateau
 
 
-def make_optimizer(cfg, model, logger, slow_heads=None, slow_ratio=5.0, rl_factor=1.0):
+def make_optimizer(cfg, model, logger, slow_heads=None, slow_ratio=5.0, rl_factor=1.0, return_lrs_by_name=False):
     params = []
+    if return_lrs_by_name:
+        lrs_by_name = {}
     for key, value in model.named_parameters():
         if not value.requires_grad:
             continue
@@ -20,9 +22,13 @@ def make_optimizer(cfg, model, logger, slow_heads=None, slow_ratio=5.0, rl_facto
                     logger.info("SLOW HEADS: {} is slow down by ratio of {}.".format(key, str(slow_ratio)))
                     lr = lr / slow_ratio
                     break
-        params += [{"params": [value], "lr": lr * rl_factor, "weight_decay": weight_decay}]
+        lr_final = lr * rl_factor
+        params += [{"params": [value], "lr": lr_final, "weight_decay": weight_decay}]
+        lrs_by_name[key] = lr_final
 
     optimizer = torch.optim.SGD(params, lr=cfg.SOLVER.BASE_LR, momentum=cfg.SOLVER.MOMENTUM)
+    if return_lrs_by_name:
+        return optimizer, lrs_by_name
     return optimizer
 
 
@@ -36,7 +42,7 @@ def make_lr_scheduler(cfg, optimizer, logger=None):
             warmup_iters=cfg.SOLVER.WARMUP_ITERS,
             warmup_method=cfg.SOLVER.WARMUP_METHOD,
         )
-    
+
     elif cfg.SOLVER.SCHEDULE.TYPE == "WarmupReduceLROnPlateau":
         return WarmupReduceLROnPlateau(
             optimizer,
@@ -49,6 +55,6 @@ def make_lr_scheduler(cfg, optimizer, logger=None):
             cooldown=cfg.SOLVER.SCHEDULE.COOLDOWN,
             logger=logger,
         )
-    
+
     else:
         raise ValueError("Invalid Schedule Type")

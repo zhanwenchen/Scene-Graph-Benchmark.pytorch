@@ -8,11 +8,17 @@ Basic training script for PyTorch
 from maskrcnn_benchmark.utils.env import setup_environment  # noqa F401 isort:skip
 
 import argparse
+import time
 import os
+from os import environ as os_environ
 import time
 import datetime
-
+from maskrcnn_benchmark.utils.comet import get_experiment
 import torch
+from torch import (
+    as_tensor as torch_as_tensor,
+    cat as torch_cat,
+)
 from maskrcnn_benchmark.config import cfg
 from maskrcnn_benchmark.data import make_data_loader
 from maskrcnn_benchmark.solver import make_lr_scheduler
@@ -22,11 +28,12 @@ from maskrcnn_benchmark.engine.inference import inference
 from maskrcnn_benchmark.modeling.detector import build_detection_model
 from maskrcnn_benchmark.utils.checkpoint import DetectronCheckpointer
 from maskrcnn_benchmark.utils.collect_env import collect_env_info
-from maskrcnn_benchmark.utils.comm import synchronize, get_rank
+from maskrcnn_benchmark.utils.comm import synchronize, get_rank, all_gather
 from maskrcnn_benchmark.utils.imports import import_file
 from maskrcnn_benchmark.utils.logger import setup_logger
 from maskrcnn_benchmark.utils.miscellaneous import mkdir, save_config
 from maskrcnn_benchmark.utils.metric_logger import MetricLogger
+from maskrcnn_benchmark.utils.comet import get_experiment
 
 
 # See if we can use apex.DistributedDataParallel instead of the torch default,
@@ -37,14 +44,17 @@ except ImportError:
     raise ImportError('Use APEX for multi-precision via apex.amp')
 
 
-def train(cfg, local_rank, distributed, logger):
+def train(cfg, local_rank, distributed, logger, experiment):
+    batch_size = cfg.SOLVER.IMS_PER_BATCH
     model = build_detection_model(cfg)
     device = torch.device(cfg.MODEL.DEVICE)
     model.to(device)
 
-    optimizer = make_optimizer(cfg, model, logger, rl_factor=float(cfg.SOLVER.IMS_PER_BATCH))
+    optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=float(batch_size), return_lrs_by_name=True)
+    hyperparameters = {'batch_size': batch_size, **lrs_by_name}
+    experiment.log_hyperparameters(hyperparameters)
     scheduler = make_lr_scheduler(cfg, optimizer)
-    
+
     output_dir = cfg.OUTPUT_DIR
     arguments = {}
     save_to_disk = get_rank() == 0
@@ -73,10 +83,6 @@ def train(cfg, local_rank, distributed, logger):
         logger.info('ending distributed')
 
     arguments["iteration"] = 0
-
-
-    
-    
     logger.info('making data loaders')
     train_data_loader = make_data_loader(
         cfg,
@@ -93,8 +99,11 @@ def train(cfg, local_rank, distributed, logger):
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
 
     if cfg.SOLVER.PRE_VAL:
-        logger.info("Validate before training")
-        run_val(cfg, model, val_data_loaders, distributed)
+        with experiment.validate():
+            logger.info("Validate before training")
+            loss_val = run_val(cfg, model, val_data_loaders, distributed)
+            experiment.log_metric('loss', loss_val, epoch=0)
+            experiment.log_epoch_end(0)
 
     logger.info("Start training")
     meters = MetricLogger(delimiter="  ")
@@ -103,69 +112,74 @@ def train(cfg, local_rank, distributed, logger):
     start_training_time = time.time()
     end = time.time()
     for iteration, (images, targets, _) in enumerate(train_data_loader, start_iter):
-        model.train()
-        
-        if any(len(target) < 1 for target in targets):
-            logger.error(f"Iteration={iteration + 1} || Image Ids used for training {_} || targets Length={[len(target) for target in targets]}" )
-        data_time = time.time() - end
-        iteration = iteration + 1
-        arguments["iteration"] = iteration
+        with experiment.train():
+            model.train()
 
-        scheduler.step()
+            if any(len(target) < 1 for target in targets):
+                logger.error(f"Iteration={iteration + 1} || Image Ids used for training {_} || targets Length={[len(target) for target in targets]}" )
+            data_time = time.time() - end
+            iteration = iteration + 1
+            arguments["iteration"] = iteration
 
-        images = images.to(device)
-        targets = [target.to(device) for target in targets]
+            scheduler.step()
 
-        loss_dict = model(images, targets)
+            images = images.to(device)
+            targets = [target.to(device) for target in targets]
 
-        losses = sum(loss for loss in loss_dict.values())
+            loss_dict = model(images, targets)
 
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = reduce_loss_dict(loss_dict)
-        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
-        meters.update(loss=losses_reduced, **loss_dict_reduced)
+            losses = sum(loss for loss in loss_dict.values())
 
-        optimizer.zero_grad()
-        # Note: If mixed precision is not used, this ends up doing nothing
-        # Otherwise apply loss scaling for mixed-precision recipe
-        with amp.scale_loss(losses, optimizer) as scaled_losses:
-            scaled_losses.backward()
-        optimizer.step()
+            # reduce losses over all GPUs for logging purposes
+            loss_dict_reduced = reduce_loss_dict(loss_dict)
+            losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+            meters.update(loss=losses_reduced, **loss_dict_reduced)
+            experiment.log_metrics(loss_dict_reduced, epoch=iteration)
 
-        batch_time = time.time() - end
-        end = time.time()
-        meters.update(time=batch_time, data=data_time)
+            optimizer.zero_grad()
+            # Note: If mixed precision is not used, this ends up doing nothing
+            # Otherwise apply loss scaling for mixed-precision recipe
+            with amp.scale_loss(losses, optimizer) as scaled_losses:
+                scaled_losses.backward()
+            optimizer.step()
 
-        eta_seconds = meters.time.global_avg * (max_iter - iteration)
-        eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+            batch_time = time.time() - end
+            end = time.time()
+            meters.update(time=batch_time, data=data_time)
 
-        if iteration % 200 == 0 or iteration == max_iter:
-            logger.info(
-                meters.delimiter.join(
-                    [
-                        "eta: {eta}",
-                        "iter: {iter}",
-                        "{meters}",
-                        "lr: {lr:.6f}",
-                        "max mem: {memory:.0f}",
-                    ]
-                ).format(
-                    eta=eta_string,
-                    iter=iteration,
-                    meters=str(meters),
-                    lr=optimizer.param_groups[0]["lr"],
-                    memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
+            eta_seconds = meters.time.global_avg * (max_iter - iteration)
+            eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+
+            if iteration % 200 == 0 or iteration == max_iter:
+                logger.info(
+                    meters.delimiter.join(
+                        [
+                            "eta: {eta}",
+                            "iter: {iter}",
+                            "{meters}",
+                            "lr: {lr:.6f}",
+                            "max mem: {memory:.0f}",
+                        ]
+                    ).format(
+                        eta=eta_string,
+                        iter=iteration,
+                        meters=str(meters),
+                        lr=optimizer.param_groups[0]["lr"],
+                        memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
+                    )
                 )
-            )
-
         if cfg.SOLVER.TO_VAL and iteration % cfg.SOLVER.VAL_PERIOD == 0:
-            logger.info("Start validating")
-            run_val(cfg, model, val_data_loaders, distributed)
+            with experiment.validate():
+                logger.info("Start validating")
+                mAP = run_val(cfg, model, val_data_loaders, distributed)
+                experiment.log_metric('mAP', mAP, epoch=iteration)
 
         if iteration % checkpoint_period == 0:
             checkpointer.save("model_{:07d}".format(iteration), **arguments)
         if iteration == max_iter:
             checkpointer.save("model_final", **arguments)
+
+        experiment.log_epoch_end(iteration)
 
     total_training_time = time.time() - start_training_time
     total_time_str = str(datetime.timedelta(seconds=total_training_time))
@@ -191,10 +205,11 @@ def run_val(cfg, model, val_data_loaders, distributed):
         iou_types = iou_types + ("relations", )
     if cfg.MODEL.ATTRIBUTE_ON:
         iou_types = iou_types + ("attributes", )
-        
+
     dataset_names = cfg.DATASETS.VAL
+    val_result = []
     for dataset_name, val_data_loader in zip(dataset_names, val_data_loaders):
-        inference(
+        dataset_result = inference(
             cfg,
             model,
             val_data_loader,
@@ -207,6 +222,16 @@ def run_val(cfg, model, val_data_loaders, distributed):
             output_folder=None,
         )
         synchronize()
+        val_result.append(dataset_result)
+    gathered_result = all_gather(torch_as_tensor(dataset_result).cpu())
+    gathered_result = [t.view(-1) for t in gathered_result]
+    gathered_result = torch_cat(gathered_result, dim=-1).view(-1)
+    valid_result = gathered_result[gathered_result>=0]
+    del gathered_result
+    # from evaluate: float(np.mean(result_dict[mode + '_recall'][100]))
+    val_result = float(valid_result.mean())
+    #torch.cuda.empty_cache()
+    return val_result
 
 
 def run_test(cfg, model, distributed):
@@ -230,12 +255,13 @@ def run_test(cfg, model, distributed):
             mkdir(output_folder)
             output_folders[idx] = output_folder
     data_loaders_val = make_data_loader(
-        cfg, 
-        mode='test', 
+        cfg,
+        mode='test',
         is_distributed=distributed
         )
+    val_result = []
     for output_folder, dataset_name, data_loader_val in zip(output_folders, dataset_names, data_loaders_val):
-        inference(
+        dataset_result = inference(
             cfg,
             model,
             data_loader_val,
@@ -248,6 +274,16 @@ def run_test(cfg, model, distributed):
             output_folder=output_folder,
         )
         synchronize()
+        val_result.append(dataset_result)
+    gathered_result = all_gather(torch_as_tensor(dataset_result).cpu())
+    gathered_result = [t.view(-1) for t in gathered_result]
+    gathered_result = torch_cat(gathered_result, dim=-1).view(-1)
+    valid_result = gathered_result[gathered_result>=0]
+    del gathered_result
+    # from evaluate: float(np.mean(result_dict[mode + '_recall'][100]))
+    val_result = float(valid_result.mean())
+    #torch.cuda.empty_cache()
+    return val_result
 
 
 def main():
@@ -311,11 +347,16 @@ def main():
     # save overloaded model config in the output directory
     save_config(cfg, output_config_path)
 
-    model = train(cfg, args.local_rank, args.distributed, logger)
+    # Create an experiment with your api key
+    model_name = os_environ['MODEL_NAME']
+    experiment = get_experiment(model_name)
+    experiment.set_name(model_name)
+    model = train(cfg, args.local_rank, args.distributed, logger, experiment)
 
     if not args.skip_test:
-        run_test(cfg, model, args.distributed)
-
+        with experiment.test():
+            mAP = run_test(cfg, model, args.distributed)
+            experiment.log_metric('mAP', mAP, epoch=cfg.SOLVER.MAX_ITER)
 
 if __name__ == "__main__":
     main()

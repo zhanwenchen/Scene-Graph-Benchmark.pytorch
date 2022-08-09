@@ -36,3 +36,5 @@ datasets/vg/
 .DS_Store
 
 checkpoints/
+
+my_secrets.py

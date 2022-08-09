@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-  export CUDA_VISIBLE_DEVICES=4,5,6,7
+  export CUDA_VISIBLE_DEVICES=0,1,2,3
   export NUM_GPUS=4
-  export MODEL_NAME="pretrain_vgg_og_1"
+  export MODEL_NAME="pretrain_vgg_og_comet_2"
   echo "Started pretraining model ${MODEL_NAME}"
   MODEL_DIRNAME=./checkpoints/pretrained_faster_rcnn/${MODEL_NAME}/
   mkdir ${MODEL_DIRNAME} &&
