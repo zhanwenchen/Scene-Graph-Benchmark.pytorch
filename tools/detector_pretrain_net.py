@@ -5,20 +5,24 @@ Basic training script for PyTorch
 
 # Set up custom environment before nearly anything else is imported
 # NOTE: this should be the first import (no not reorder)
+from comet_ml import API, Experiment, ExistingExperiment
 from maskrcnn_benchmark.utils.env import setup_environment  # noqa F401 isort:skip
 
 import argparse
-import time
-import os
+from time import time as time_time
 from os import environ as os_environ
-import time
-import datetime
-from maskrcnn_benchmark.utils.comet import get_experiment
-import torch
+from os.path import join as os_path_join
+from datetime import timedelta as datetime_timedelta
 from torch import (
     as_tensor as torch_as_tensor,
     cat as torch_cat,
+    device as torch_device,
 )
+from torch.cuda import max_memory_allocated, set_device
+from torch.nn.parallel import DistributedDataParallel
+from torch.multiprocessing import set_start_method
+from torch.distributed import init_process_group
+from apex.amp import scale_loss as amp_scale_loss, initialize as amp_initialize
 from maskrcnn_benchmark.config import cfg
 from maskrcnn_benchmark.data import make_data_loader
 from maskrcnn_benchmark.solver import make_lr_scheduler
@@ -29,26 +33,17 @@ from maskrcnn_benchmark.modeling.detector import build_detection_model
 from maskrcnn_benchmark.utils.checkpoint import DetectronCheckpointer
 from maskrcnn_benchmark.utils.collect_env import collect_env_info
 from maskrcnn_benchmark.utils.comm import synchronize, get_rank, all_gather
-from maskrcnn_benchmark.utils.imports import import_file
 from maskrcnn_benchmark.utils.logger import setup_logger
 from maskrcnn_benchmark.utils.miscellaneous import mkdir, save_config
 from maskrcnn_benchmark.utils.metric_logger import MetricLogger
 from maskrcnn_benchmark.utils.comet import get_experiment
 
 
-# See if we can use apex.DistributedDataParallel instead of the torch default,
-# and enable mixed-precision via apex.amp
-try:
-    from apex import amp
-except ImportError:
-    raise ImportError('Use APEX for multi-precision via apex.amp')
-
-
 def train(cfg, local_rank, distributed, logger, experiment):
     batch_size = cfg.SOLVER.IMS_PER_BATCH
     model = build_detection_model(cfg)
-    device = torch.device(cfg.MODEL.DEVICE)
-    model.to(device)
+    device = torch_device(cfg.MODEL.DEVICE)
+    model.to(device, non_blocking=True)
 
     optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=float(batch_size), return_lrs_by_name=True)
     hyperparameters = {'batch_size': batch_size, **lrs_by_name}
@@ -70,12 +65,12 @@ def train(cfg, local_rank, distributed, logger, experiment):
     # Initialize mixed-precision training
     use_mixed_precision = cfg.DTYPE == "float16"
     amp_opt_level = 'O1' if use_mixed_precision else 'O0'
-    model, optimizer = amp.initialize(model, optimizer, opt_level=amp_opt_level)
+    model, optimizer = amp_initialize(model, optimizer, opt_level=amp_opt_level)
 
     if distributed:
         logger.info('starting distributed')
-        torch.multiprocessing.set_start_method('spawn')
-        model = torch.nn.parallel.DistributedDataParallel(
+        set_start_method('spawn')
+        model = DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,
             # this should be removed if we update BatchNorm stats
             broadcast_buffers=False,
@@ -109,22 +104,22 @@ def train(cfg, local_rank, distributed, logger, experiment):
     meters = MetricLogger(delimiter="  ")
     max_iter = len(train_data_loader)
     start_iter = arguments["iteration"]
-    start_training_time = time.time()
-    end = time.time()
+    start_training_time = time_time()
+    end = time_time()
     for iteration, (images, targets, _) in enumerate(train_data_loader, start_iter):
         with experiment.train():
             model.train()
 
             if any(len(target) < 1 for target in targets):
                 logger.error(f"Iteration={iteration + 1} || Image Ids used for training {_} || targets Length={[len(target) for target in targets]}" )
-            data_time = time.time() - end
+            data_time = time_time() - end
             iteration = iteration + 1
             arguments["iteration"] = iteration
 
             scheduler.step()
 
             images = images.to(device)
-            targets = [target.to(device) for target in targets]
+            targets = [target.to(device, non_blocking=True) for target in targets]
 
             loss_dict = model(images, targets)
 
@@ -136,19 +131,19 @@ def train(cfg, local_rank, distributed, logger, experiment):
             meters.update(loss=losses_reduced, **loss_dict_reduced)
             experiment.log_metrics(loss_dict_reduced, epoch=iteration)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             # Note: If mixed precision is not used, this ends up doing nothing
             # Otherwise apply loss scaling for mixed-precision recipe
-            with amp.scale_loss(losses, optimizer) as scaled_losses:
+            with amp_scale_loss(losses, optimizer) as scaled_losses:
                 scaled_losses.backward()
             optimizer.step()
 
-            batch_time = time.time() - end
-            end = time.time()
+            batch_time = time_time() - end
+            end = time_time()
             meters.update(time=batch_time, data=data_time)
 
             eta_seconds = meters.time.global_avg * (max_iter - iteration)
-            eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+            eta_string = str(datetime_timedelta(seconds=int(eta_seconds)))
 
             if iteration % 200 == 0 or iteration == max_iter:
                 logger.info(
@@ -165,7 +160,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
                         iter=iteration,
                         meters=str(meters),
                         lr=optimizer.param_groups[0]["lr"],
-                        memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
+                        memory=max_memory_allocated() / 1048576.0,
                     )
                 )
         if cfg.SOLVER.TO_VAL and iteration % cfg.SOLVER.VAL_PERIOD == 0:
@@ -181,8 +176,8 @@ def train(cfg, local_rank, distributed, logger, experiment):
 
         experiment.log_epoch_end(iteration)
 
-    total_training_time = time.time() - start_training_time
-    total_time_str = str(datetime.timedelta(seconds=total_training_time))
+    total_training_time = time_time() - start_training_time
+    total_time_str = str(datetime_timedelta(seconds=total_training_time))
     logger.info(
         "Total training time: {} ({:.4f} s / it)".format(
             total_time_str, total_training_time / (max_iter)
@@ -251,7 +246,7 @@ def run_test(cfg, model, distributed):
     dataset_names = cfg.DATASETS.TEST
     if cfg.OUTPUT_DIR:
         for idx, dataset_name in enumerate(dataset_names):
-            output_folder = os.path.join(cfg.OUTPUT_DIR, "inference", dataset_name)
+            output_folder = os_path_join(cfg.OUTPUT_DIR, "inference", dataset_name)
             mkdir(output_folder)
             output_folders[idx] = output_folder
     data_loaders_val = make_data_loader(
@@ -311,12 +306,12 @@ def main():
 
     args = parser.parse_args()
 
-    num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
+    num_gpus = int(os_environ.get("WORLD_SIZE", 1))
     args.distributed = num_gpus > 1
 
     if args.distributed:
-        torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group(
+        set_device(args.local_rank)
+        init_process_group(
             backend="nccl", init_method="env://"
         )
         synchronize()
@@ -342,7 +337,7 @@ def main():
         logger.info(config_str)
     logger.info("Running with config:\n{}".format(cfg))
 
-    output_config_path = os.path.join(cfg.OUTPUT_DIR, 'config.yml')
+    output_config_path = os_path_join(cfg.OUTPUT_DIR, 'config.yml')
     logger.info("Saving config into: {}".format(output_config_path))
     # save overloaded model config in the output directory
     save_config(cfg, output_config_path)
