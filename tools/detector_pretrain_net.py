@@ -47,7 +47,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
 
     optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=1.0, return_lrs_by_name=True)
     hyperparameters = {'batch_size': batch_size, **lrs_by_name}
-    if isinstance(experiment, Experiment):
+    if not isinstance(experiment, ExistingExperiment):
         experiment.log_hyperparameters(hyperparameters)
     scheduler = make_lr_scheduler(cfg, optimizer)
 
