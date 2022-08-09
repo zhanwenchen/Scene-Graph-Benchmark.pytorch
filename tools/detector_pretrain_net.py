@@ -45,7 +45,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
     device = torch_device(cfg.MODEL.DEVICE)
     model.to(device, non_blocking=True)
 
-    optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=float(batch_size), return_lrs_by_name=True)
+    optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=1.0, return_lrs_by_name=True)
     hyperparameters = {'batch_size': batch_size, **lrs_by_name}
     experiment.log_hyperparameters(hyperparameters)
     scheduler = make_lr_scheduler(cfg, optimizer)
