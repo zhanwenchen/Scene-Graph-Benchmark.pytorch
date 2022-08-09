@@ -34,7 +34,7 @@ def get_dataset_statistics(cfg):
 
     data_statistics_name = ''.join(dataset_names) + '_statistics'
     save_file = os.path.join(cfg.OUTPUT_DIR, "{}.cache".format(data_statistics_name))
-    
+
     if os.path.exists(save_file):
         logger.info('Loading data statistics from: ' + str(save_file))
         logger.info('-'*100)
@@ -259,7 +259,7 @@ def make_data_loader(cfg, mode='train', is_distributed=False, start_iter=0, data
             if not os.path.exists(cfg.DETECTED_SGG_DIR):
                 os.makedirs(cfg.DETECTED_SGG_DIR)
 
-            with open(os.path.join(cfg.DETECTED_SGG_DIR, 'custom_data_info.json'), 'w') as outfile:  
+            with open(os.path.join(cfg.DETECTED_SGG_DIR, 'custom_data_info.json'), 'w') as outfile:
                 json.dump(custom_data_info, outfile)
             print('=====> ' + str(os.path.join(cfg.DETECTED_SGG_DIR, 'custom_data_info.json')) + ' SAVED !')
         data_loaders.append(data_loader)

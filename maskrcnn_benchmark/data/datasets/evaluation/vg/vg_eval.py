@@ -36,11 +36,12 @@ def do_vg_evaluation(
             mode = 'sgcls'
     else:
         mode = 'sgdet'
-
+    if cfg.MODEL.RELATION_ON is False:
+        mode = 'pretrain'
     num_rel_category = cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
     multiple_preds = cfg.TEST.RELATION.MULTIPLE_PREDS
     iou_thres = cfg.TEST.RELATION.IOU_THRESHOLD
-    assert mode in {'predcls', 'sgdet', 'sgcls', 'phrdet', 'preddet'}
+    assert mode in {'predcls', 'sgdet', 'sgcls', 'phrdet', 'preddet', 'pretrain'}
 
     groundtruths = []
     for image_id, prediction in enumerate(predictions):
@@ -54,7 +55,7 @@ def do_vg_evaluation(
         groundtruths.append(gt)
 
     save_output(output_folder, groundtruths, predictions, dataset)
-    
+
     result_str = '\n' + '=' * 100 + '\n'
     if "bbox" in iou_types:
         # create a Coco-like object that we can use to evaluate detection!
@@ -76,7 +77,7 @@ def do_vg_evaluation(
             'info': {'description': 'use coco script for vg detection evaluation'},
             'images': [{'id': i} for i in range(len(groundtruths))],
             'categories': [
-                {'supercategory': 'person', 'id': i, 'name': name} 
+                {'supercategory': 'person', 'id': i, 'name': name}
                 for i, name in enumerate(dataset.ind_to_classes) if name != '__background__'
                 ],
             'annotations': anns,
@@ -108,7 +109,7 @@ def do_vg_evaluation(
         coco_eval.accumulate()
         coco_eval.summarize()
         mAp = coco_eval.stats[1]
-        
+
         result_str += 'Detection evaluation mAp=%.4f\n' % mAp
         result_str += '=' * 100 + '\n'
 
@@ -134,7 +135,7 @@ def do_vg_evaluation(
         eval_ng_zeroshot_recall = SGNGZeroShotRecall(result_dict)
         eval_ng_zeroshot_recall.register_container(mode)
         evaluator['eval_ng_zeroshot_recall'] = eval_ng_zeroshot_recall
-        
+
         # used by https://github.com/NVIDIA/ContrastiveLosses4VRD for sgcls and predcls
         eval_pair_accuracy = SGPairAccuracy(result_dict)
         eval_pair_accuracy.register_container(mode)
@@ -160,14 +161,14 @@ def do_vg_evaluation(
         global_container['iou_thres'] = iou_thres
         global_container['attribute_on'] = attribute_on
         global_container['num_attributes'] = num_attributes
-        
+
         for groundtruth, prediction in zip(groundtruths, predictions):
             evaluate_relation_of_one_image(groundtruth, prediction, global_container, evaluator)
-        
+
         # calculate mean recall
         eval_mean_recall.calculate_mean_recall(mode)
         eval_ng_mean_recall.calculate_mean_recall(mode)
-        
+
         # print result
         result_str += eval_recall.generate_print_string(mode)
         result_str += eval_nog_recall.generate_print_string(mode)
@@ -175,14 +176,14 @@ def do_vg_evaluation(
         result_str += eval_ng_zeroshot_recall.generate_print_string(mode)
         result_str += eval_mean_recall.generate_print_string(mode)
         result_str += eval_ng_mean_recall.generate_print_string(mode)
-        
+
         if cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
             result_str += eval_pair_accuracy.generate_print_string(mode)
         result_str += '=' * 100 + '\n'
 
 
     logger.info(result_str)
-    
+
     if "relations" in iou_types:
         if output_folder:
             torch.save(result_dict, os.path.join(output_folder, 'result_dict.pytorch'))
@@ -249,10 +250,10 @@ def evaluate_relation_of_one_image(groundtruth, prediction, global_container, ev
     local_container['pred_boxes'] = prediction.convert('xyxy').bbox.detach().cpu().numpy()                  # (#pred_objs, 4)
     local_container['pred_classes'] = prediction.get_field('pred_labels').long().detach().cpu().numpy()     # (#pred_objs, )
     local_container['obj_scores'] = prediction.get_field('pred_scores').detach().cpu().numpy()              # (#pred_objs, )
-    
+
 
     # to calculate accuracy, only consider those gt pairs
-    # This metric is used by "Graphical Contrastive Losses for Scene Graph Parsing" 
+    # This metric is used by "Graphical Contrastive Losses for Scene Graph Parsing"
     # for sgcls and predcls
     if mode != 'sgdet':
         evaluator['eval_pair_accuracy'].prepare_gtpair(local_container)
@@ -317,7 +318,7 @@ def evaluate_relation_of_one_image(groundtruth, prediction, global_container, ev
     # No Graph Constraint Zero-Shot Recall
     evaluator['eval_ng_zeroshot_recall'].calculate_recall(global_container, local_container, mode)
 
-    return 
+    return
 
 
 

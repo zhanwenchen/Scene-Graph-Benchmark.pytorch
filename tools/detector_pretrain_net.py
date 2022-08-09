@@ -37,6 +37,8 @@ from maskrcnn_benchmark.utils.logger import setup_logger
 from maskrcnn_benchmark.utils.miscellaneous import mkdir, save_config
 from maskrcnn_benchmark.utils.metric_logger import MetricLogger
 from maskrcnn_benchmark.utils.comet import get_experiment
+from maskrcnn_benchmark.utils.utils_train import setup_seed
+from util_misc import load_gbnet_vgg_weights, load_gbnet_fcs_weights, load_gbnet_rpn_weights
 
 
 def train(cfg, local_rank, distributed, logger, experiment):
@@ -63,6 +65,27 @@ def train(cfg, local_rank, distributed, logger, experiment):
     logger.info('finished loading extra checkpoint data')
     arguments.update(extra_checkpoint_data)
 
+    if cfg.MODEL.BACKBONE.CONV_BODY == 'VGG-16':
+        vgg16_pretrain_strategy = cfg.MODEL.VGG.PRETRAIN_STRATEGY
+        fpath = cfg.MODEL.VGG.GBNET_PRETRAINED_DETECTOR_FPATH
+        if vgg16_pretrain_strategy == 'none':
+            pass
+        elif vgg16_pretrain_strategy == 'backbone':
+            state_dict = load_gbnet_vgg_weights(model, fpath)
+            del state_dict
+        elif vgg16_pretrain_strategy == 'fcs':
+            state_dict = load_gbnet_vgg_weights(model, fpath)
+            state_dict = load_gbnet_fcs_weights(model, fpath, state_dict=state_dict)
+            del state_dict
+        elif vgg16_pretrain_strategy == 'rpn':
+            state_dict = load_gbnet_vgg_weights(model, fpath)
+            state_dict = load_gbnet_fcs_weights(model, fpath, state_dict=state_dict)
+            state_dict = load_gbnet_rpn_weights(model, fpath, state_dict=state_dict)
+            del state_dict
+        else:
+            raise NotImplementedError(f'vgg16_pretrain_strategy={vgg16_pretrain_strategy} is not a valid strategy')
+    model.to(device, non_blocking=True)
+
     # Initialize mixed-precision training
     use_mixed_precision = cfg.DTYPE == "float16"
     amp_opt_level = 'O1' if use_mixed_precision else 'O0'
@@ -74,6 +97,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
             model, device_ids=[local_rank], output_device=local_rank,
             # this should be removed if we update BatchNorm stats
             broadcast_buffers=False,
+            find_unused_parameters=False,
         )
         logger.info('ending distributed')
 
@@ -282,6 +306,7 @@ def run_test(cfg, model, distributed):
 
 
 def main():
+    setup_seed(1234)
     parser = argparse.ArgumentParser(description="PyTorch Object Detection Training")
     parser.add_argument(
         "--config-file",
