@@ -70,7 +70,6 @@ def train(cfg, local_rank, distributed, logger, experiment):
 
     if distributed:
         logger.info('starting distributed')
-        set_start_method('spawn')
         model = DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,
             # this should be removed if we update BatchNorm stats
