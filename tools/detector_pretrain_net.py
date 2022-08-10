@@ -55,7 +55,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
     model.to(device, non_blocking=True)
 
     using_scheduler = cfg.SOLVER.TYPE in OPTIMIZERS_WITH_SCHEDULERS
-    optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=os_environ.get("NUM_GPUS", 1) * sqrt(batch_size), return_lrs_by_name=True)
+    optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=int(os_environ.get("NUM_GPUS", 1)) * sqrt(batch_size), return_lrs_by_name=True)
     hyperparameters = {'batch_size': batch_size, **lrs_by_name}
     if not isinstance(experiment, ExistingExperiment):
         experiment.log_parameters(hyperparameters)
