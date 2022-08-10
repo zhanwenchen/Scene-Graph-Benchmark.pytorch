@@ -13,6 +13,36 @@ def load_gbnet_vgg_weights(model, fpath, state_dict=None):
     if state_dict is None:
         state_dict = torch_load(fpath)['state_dict']
     with torch_no_grad():
+        # Before
+        sum_before = sum([
+            model.backbone.body.conv_body[0].weight.sum(),
+            model.backbone.body.conv_body[0].bias.sum(),
+            model.backbone.body.conv_body[2].weight.sum(),
+            model.backbone.body.conv_body[2].bias.sum(),
+            model.backbone.body.conv_body[5].weight.sum(),
+            model.backbone.body.conv_body[5].bias.sum(),
+            model.backbone.body.conv_body[7].weight.sum(),
+            model.backbone.body.conv_body[7].bias.sum(),
+            model.backbone.body.conv_body[10].weight.sum(),
+            model.backbone.body.conv_body[10].bias.sum(),
+            model.backbone.body.conv_body[12].weight.sum(),
+            model.backbone.body.conv_body[12].bias.sum(),
+            model.backbone.body.conv_body[14].weight.sum(),
+            model.backbone.body.conv_body[14].bias.sum(),
+            model.backbone.body.conv_body[17].weight.sum(),
+            model.backbone.body.conv_body[17].bias.sum(),
+            model.backbone.body.conv_body[19].weight.sum(),
+            model.backbone.body.conv_body[19].bias.sum(),
+            model.backbone.body.conv_body[21].weight.sum(),
+            model.backbone.body.conv_body[21].bias.sum(),
+            model.backbone.body.conv_body[24].weight.sum(),
+            model.backbone.body.conv_body[24].bias.sum(),
+            model.backbone.body.conv_body[26].weight.sum(),
+            model.backbone.body.conv_body[26].bias.sum(),
+            model.backbone.body.conv_body[28].weight.sum(),
+            model.backbone.body.conv_body[28].bias.sum()
+        ])
+
         model.backbone.body.conv_body[0].weight.copy_(state_dict['features.0.weight'])
         model.backbone.body.conv_body[0].bias.copy_(state_dict['features.0.bias'])
         model.backbone.body.conv_body[2].weight.copy_(state_dict['features.2.weight'])
@@ -39,7 +69,36 @@ def load_gbnet_vgg_weights(model, fpath, state_dict=None):
         model.backbone.body.conv_body[26].bias.copy_(state_dict['features.26.bias'])
         model.backbone.body.conv_body[28].weight.copy_(state_dict['features.28.weight'])
         model.backbone.body.conv_body[28].bias.copy_(state_dict['features.28.bias'])
-    print('load_gbnet_vgg_weights: loaded weights')
+
+        sum_after = sum([
+            model.backbone.body.conv_body[0].weight.sum(),
+            model.backbone.body.conv_body[0].bias.sum(),
+            model.backbone.body.conv_body[2].weight.sum(),
+            model.backbone.body.conv_body[2].bias.sum(),
+            model.backbone.body.conv_body[5].weight.sum(),
+            model.backbone.body.conv_body[5].bias.sum(),
+            model.backbone.body.conv_body[7].weight.sum(),
+            model.backbone.body.conv_body[7].bias.sum(),
+            model.backbone.body.conv_body[10].weight.sum(),
+            model.backbone.body.conv_body[10].bias.sum(),
+            model.backbone.body.conv_body[12].weight.sum(),
+            model.backbone.body.conv_body[12].bias.sum(),
+            model.backbone.body.conv_body[14].weight.sum(),
+            model.backbone.body.conv_body[14].bias.sum(),
+            model.backbone.body.conv_body[17].weight.sum(),
+            model.backbone.body.conv_body[17].bias.sum(),
+            model.backbone.body.conv_body[19].weight.sum(),
+            model.backbone.body.conv_body[19].bias.sum(),
+            model.backbone.body.conv_body[21].weight.sum(),
+            model.backbone.body.conv_body[21].bias.sum(),
+            model.backbone.body.conv_body[24].weight.sum(),
+            model.backbone.body.conv_body[24].bias.sum(),
+            model.backbone.body.conv_body[26].weight.sum(),
+            model.backbone.body.conv_body[26].bias.sum(),
+            model.backbone.body.conv_body[28].weight.sum(),
+            model.backbone.body.conv_body[28].bias.sum()
+        ])
+    print(f'load_gbnet_vgg_weights: loaded weights. sum_before={sum_before}. sum_after={sum_after}')
     return state_dict
  # 'roi_fmap.0.weight',
  # 'roi_fmap.0.bias',
