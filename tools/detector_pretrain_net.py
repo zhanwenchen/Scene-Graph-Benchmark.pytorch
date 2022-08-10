@@ -78,7 +78,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
         logger.info('finished instatntiating checkpointer')
         extra_checkpoint_data = checkpointer.load(cfg.MODEL.WEIGHT, update_schedule=cfg.SOLVER.UPDATE_SCHEDULE_DURING_LOAD)
         logger.info('finished loading extra checkpoint data')
-    arguments.update(extra_checkpoint_data)
+        arguments.update(extra_checkpoint_data)
 
     if cfg.MODEL.BACKBONE.CONV_BODY == 'VGG-16':
         vgg16_pretrain_strategy = cfg.MODEL.VGG.PRETRAIN_STRATEGY
