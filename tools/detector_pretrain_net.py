@@ -8,6 +8,7 @@ Basic training script for PyTorch
 from comet_ml import API, Experiment, ExistingExperiment
 from maskrcnn_benchmark.utils.env import setup_environment  # noqa F401 isort:skip
 
+from math import sqrt
 import argparse
 from time import time as time_time
 from os import environ as os_environ
@@ -17,12 +18,14 @@ from torch import (
     as_tensor as torch_as_tensor,
     cat as torch_cat,
     device as torch_device,
+    no_grad as torch_no_grad,
 )
 from torch.cuda import max_memory_allocated, set_device
 from torch.nn.parallel import DistributedDataParallel
-from torch.multiprocessing import set_start_method
+from torch.nn.utils import clip_grad_norm_
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.distributed import init_process_group
-from apex.amp import scale_loss as amp_scale_loss, initialize as amp_initialize
+# from apex.amp import scale_loss as amp_scale_loss, initialize as amp_initialize
 from maskrcnn_benchmark.config import cfg
 from maskrcnn_benchmark.data import make_data_loader
 from maskrcnn_benchmark.solver import make_lr_scheduler
@@ -52,12 +55,17 @@ def train(cfg, local_rank, distributed, logger, experiment):
     model.to(device, non_blocking=True)
 
     using_scheduler = cfg.SOLVER.TYPE in OPTIMIZERS_WITH_SCHEDULERS
-    optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=1.0, return_lrs_by_name=True)
+    optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=os_environ.get("NUM_GPUS", 1) * sqrt(batch_size), return_lrs_by_name=True)
     hyperparameters = {'batch_size': batch_size, **lrs_by_name}
     if not isinstance(experiment, ExistingExperiment):
         experiment.log_parameters(hyperparameters)
     print('hyperparameters =', hyperparameters)
-    scheduler = make_lr_scheduler(cfg, optimizer) if using_scheduler else None
+    using_reduce_lr_on_plateau = cfg.MODEL.BACKBONE.CONV_BODY == 'VGG-16' and using_scheduler
+    if using_reduce_lr_on_plateau:
+        scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.1,
+            verbose=True, threshold=0.001, threshold_mode='abs', cooldown=1)
+    else:
+        scheduler = make_lr_scheduler(cfg, optimizer) if using_scheduler else None
 
     output_dir = cfg.OUTPUT_DIR
     arguments = {}
@@ -94,8 +102,8 @@ def train(cfg, local_rank, distributed, logger, experiment):
 
     # Initialize mixed-precision training
     use_mixed_precision = cfg.DTYPE == "float16"
-    amp_opt_level = 'O1' if use_mixed_precision else 'O0'
-    model, optimizer = amp_initialize(model, optimizer, opt_level=amp_opt_level)
+    # amp_opt_level = 'O1' if use_mixed_precision else 'O0'
+    # model, optimizer = amp_initialize(model, optimizer, opt_level=amp_opt_level)
 
     if distributed:
         logger.info('starting distributed')
@@ -136,6 +144,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
     start_iter = arguments["iteration"]
     start_training_time = time_time()
     end = time_time()
+    clip = cfg.SOLVER.GRAD_NORM_CLIP
     for iteration, (images, targets, _) in enumerate(train_data_loader, start_iter):
         with experiment.train():
             model.train()
@@ -145,9 +154,6 @@ def train(cfg, local_rank, distributed, logger, experiment):
             data_time = time_time() - end
             iteration = iteration + 1
             arguments["iteration"] = iteration
-
-            if using_scheduler:
-                scheduler.step()
 
             images = images.to(device, non_blocking=True)
             targets = [target.to(device) for target in targets]
@@ -162,15 +168,20 @@ def train(cfg, local_rank, distributed, logger, experiment):
             meters.update(loss=losses_reduced, **loss_dict_reduced)
             experiment.log_metrics(loss_dict_reduced, epoch=iteration)
 
-            optimizer.zero_grad(set_to_none=True)
-            # Note: If mixed precision is not used, this ends up doing nothing
-            # Otherwise apply loss scaling for mixed-precision recipe
-            with amp_scale_loss(losses, optimizer) as scaled_losses:
-                scaled_losses.backward()
             if cfg.SOLVER.TYPE in APEX_FUSED_OPTIMIZERS:
                 optimizer.zero_grad() # For Apex FusedSGD, FusedAdam, etc
             else:
                 optimizer.zero_grad(set_to_none=True) # For Apex FusedSGD, FusedAdam, etc
+            # Note: If mixed precision is not used, this ends up doing nothing
+            # Otherwise apply loss scaling for mixed-precision recipe
+            # with amp_scale_loss(losses, optimizer) as scaled_losses:
+            #     scaled_losses.backward()
+
+            losses.backward()
+
+            clip_grad_norm_(model.parameters(), clip)
+
+            optimizer.step()
 
             batch_time = time_time() - end
             end = time_time()
@@ -180,6 +191,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
             eta_string = str(datetime_timedelta(seconds=int(eta_seconds)))
 
             if iteration % 200 == 0 or iteration == max_iter:
+                lr_i = optimizer.param_groups[0]["lr"]
                 logger.info(
                     meters.delimiter.join(
                         [
@@ -193,16 +205,19 @@ def train(cfg, local_rank, distributed, logger, experiment):
                         eta=eta_string,
                         iter=iteration,
                         meters=str(meters),
-                        lr=optimizer.param_groups[0]["lr"],
+                        lr=lr_i,
                         memory=max_memory_allocated() / 1048576.0,
                     )
                 )
+                experiment.log_metric('lr', lr_i)
+
         if cfg.SOLVER.TO_VAL and iteration % cfg.SOLVER.VAL_PERIOD == 0:
             with experiment.validate():
                 logger.info("Start validating")
                 mAP = run_val(cfg, model, val_data_loaders, distributed)
                 experiment.log_metric('mAP', mAP, epoch=iteration)
-
+                if using_scheduler:
+                    scheduler.step(mAP)
         if iteration % checkpoint_period == 0:
             checkpointer.save("model_{:07d}".format(iteration), **arguments)
         if iteration == max_iter:
@@ -221,6 +236,7 @@ def train(cfg, local_rank, distributed, logger, experiment):
     return model
 
 
+@torch_no_grad()
 def run_val(cfg, model, val_data_loaders, distributed):
     if distributed:
         model = model.module
@@ -263,6 +279,7 @@ def run_val(cfg, model, val_data_loaders, distributed):
     return val_result
 
 
+@torch_no_grad()
 def run_test(cfg, model, distributed):
     if distributed:
         model = model.module
