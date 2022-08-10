@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
   export CUDA_VISIBLE_DEVICES=4,5,6,7
   export NUM_GPUS=8
-  export MODEL_NAME="pretrain_vgg_og_comet_3"
+  export MODEL_NAME="pretrain_vgg_og_comet_4"
   echo "Started pretraining model ${MODEL_NAME}"
   MODEL_DIRNAME=./checkpoints/pretrained_faster_rcnn/${MODEL_NAME}/
   mkdir ${MODEL_DIRNAME} &&
@@ -12,12 +12,12 @@
   --config-file "configs/pretrain_detector_VGG16_1x.yaml" \
   MODEL.VGG.PRETRAIN_STRATEGY backbone \
   MODEL.RELATION_ON False \
-  SOLVER.IMS_PER_BATCH 8 \
+  SOLVER.TYPE "Adam" \
+  SOLVER.IMS_PER_BATCH 64 \
   TEST.IMS_PER_BATCH ${NUM_GPUS} \
   SOLVER.PRE_VAL True \
   DTYPE "float32" \
   SOLVER.MAX_ITER 50000 \
-  SOLVER.STEPS "(30000, 45000)" \
   SOLVER.VAL_PERIOD 2000 \
   SOLVER.CHECKPOINT_PERIOD 2000 \
   GLOVE_DIR ./datasets/vg/ \

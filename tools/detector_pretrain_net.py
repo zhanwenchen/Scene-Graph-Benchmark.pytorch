@@ -41,17 +41,23 @@ from maskrcnn_benchmark.utils.utils_train import setup_seed
 from util_misc import load_gbnet_vgg_weights, load_gbnet_fcs_weights, load_gbnet_rpn_weights
 
 
+APEX_FUSED_OPTIMIZERS = {'FusedSGD', 'FusedAdam'}
+OPTIMIZERS_WITH_SCHEDULERS = {'SGD', 'FusedSGD'}
+
+
 def train(cfg, local_rank, distributed, logger, experiment):
     batch_size = cfg.SOLVER.IMS_PER_BATCH
     model = build_detection_model(cfg)
     device = torch_device(cfg.MODEL.DEVICE)
     model.to(device, non_blocking=True)
 
+    using_scheduler = cfg.SOLVER.TYPE in OPTIMIZERS_WITH_SCHEDULERS
     optimizer, lrs_by_name = make_optimizer(cfg, model, logger, rl_factor=1.0, return_lrs_by_name=True)
     hyperparameters = {'batch_size': batch_size, **lrs_by_name}
     if not isinstance(experiment, ExistingExperiment):
         experiment.log_hyperparameters(hyperparameters)
-    scheduler = make_lr_scheduler(cfg, optimizer)
+    print('hyperparameters =', hyperparameters)
+    scheduler = make_lr_scheduler(cfg, optimizer) if using_scheduler else None
 
     output_dir = cfg.OUTPUT_DIR
     arguments = {}
@@ -140,7 +146,8 @@ def train(cfg, local_rank, distributed, logger, experiment):
             iteration = iteration + 1
             arguments["iteration"] = iteration
 
-            scheduler.step()
+            if using_scheduler:
+                scheduler.step()
 
             images = images.to(device, non_blocking=True)
             targets = [target.to(device) for target in targets]
@@ -160,7 +167,10 @@ def train(cfg, local_rank, distributed, logger, experiment):
             # Otherwise apply loss scaling for mixed-precision recipe
             with amp_scale_loss(losses, optimizer) as scaled_losses:
                 scaled_losses.backward()
-            optimizer.step()
+            if cfg.SOLVER.TYPE in APEX_FUSED_OPTIMIZERS:
+                optimizer.zero_grad() # For Apex FusedSGD, FusedAdam, etc
+            else:
+                optimizer.zero_grad(set_to_none=True) # For Apex FusedSGD, FusedAdam, etc
 
             batch_time = time_time() - end
             end = time_time()
