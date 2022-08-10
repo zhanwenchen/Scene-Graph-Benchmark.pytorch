@@ -142,8 +142,8 @@ def train(cfg, local_rank, distributed, logger, experiment):
 
             scheduler.step()
 
-            images = images.to(device)
-            targets = [target.to(device, non_blocking=True) for target in targets]
+            images = images.to(device, non_blocking=True)
+            targets = [target.to(device) for target in targets]
 
             loss_dict = model(images, targets)
 
